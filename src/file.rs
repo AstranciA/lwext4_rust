@@ -1,13 +1,64 @@
 use crate::bindings::*;
 use alloc::{ffi::CString, vec::Vec};
+use core::{slice, mem, convert::TryInto};
+use byteorder::{LittleEndian, ByteOrder};
 
 // Ext4File文件操作与block device设备解耦了
 pub struct Ext4File {
     //file_desc_map: BTreeMap<CString, ext4_file>,
     file_desc: ext4_file,
     file_path: CString,
-
     this_type: InodeTypes,
+}
+
+pub struct InodeInfo {
+    pub dev : u64,
+    pub st_ino: u32,
+    pub nlink: u32,
+    pub uid: u16,
+    pub gid: u16,
+    pub nblk_lo: u32,
+    pub atime: u32,
+    pub mtime: u32,
+    pub ctime: u32,
+    pub atime_ex: u32,
+    pub mtime_ex: u32,
+    pub ctime_ex: u32,
+}
+
+impl InodeInfo {
+    pub fn dev(&self) -> u64 {self.dev}
+    pub fn st_ino(&self) -> u32 {self.st_ino}
+    pub fn nlink(&self) -> u32 {self.nlink}
+    pub fn uid(&self) -> u16 {self.uid}
+    pub fn gid(&self) -> u16 {self.gid}
+    pub fn nblk_lo(&self) -> u32 {self.nblk_lo}
+
+    pub fn atime(&self) -> u32 {self.atime}
+    pub fn mtime(&self) -> u32 {self.mtime}
+    pub fn ctime(&self) -> u32 {self.ctime}
+
+    pub fn atime_ex(&self) -> u32 {self.atime_ex}
+    pub fn mtime_ex(&self) -> u32 {self.mtime_ex}
+    pub fn ctime_ex(&self) -> u32 {self.ctime_ex}
+}
+
+pub fn to_inode_info(ino: u32, inode: &ext4_inode) -> InodeInfo {
+    InodeInfo {
+        // dev: u64::from(LittleEndian::read_u16(&inode.blocks[0].to_ne_bytes())),
+        dev: 0,
+        st_ino: ino,
+        nlink: u32::from(LittleEndian::read_u16(&inode.links_count.to_ne_bytes())),
+        uid: u16::from(LittleEndian::read_u16(&inode.uid.to_ne_bytes())),
+        gid: u16::from(LittleEndian::read_u16(&inode.gid.to_ne_bytes())),
+        nblk_lo: u32::from(LittleEndian::read_u32(&inode.blocks_count_lo.to_ne_bytes())),
+        atime: u32::from(LittleEndian::read_u32(&inode.access_time.to_ne_bytes())),
+        ctime: u32::from(LittleEndian::read_u32(&inode.change_inode_time.to_ne_bytes())),
+        mtime: u32::from(LittleEndian::read_u32(&inode.modification_time.to_ne_bytes())),
+        atime_ex: u32::from(LittleEndian::read_u32(&inode.atime_extra.to_ne_bytes())),
+        ctime_ex: u32::from(LittleEndian::read_u32(&inode.ctime_extra.to_ne_bytes())),
+        mtime_ex: u32::from(LittleEndian::read_u32(&inode.mtime_extra.to_ne_bytes())),
+    }
 }
 
 impl Ext4File {
@@ -31,6 +82,29 @@ impl Ext4File {
 
     pub fn get_type(&self) -> InodeTypes {
         self.this_type.clone()
+    }
+
+    pub fn get_inode(&self) -> Result<InodeInfo,i32> {
+        let mut rt_ino: u32 = 0;
+        let bytes: [u8; mem::size_of::<ext4_inode>()] = [0; mem::size_of::<ext4_inode>()];
+
+        let mut inode = unsafe{
+            if bytes.len() < mem::size_of::<ext4_inode>() {
+                core::panic!("Input bytes too short for ext4_inode");
+            }
+            let ptr = bytes.as_ptr() as *mut ext4_inode;
+            ptr.read_unaligned()
+        };
+
+        //TODO:check inode safety
+        let ret= unsafe {ext4_raw_inode_fill(self.get_path().into_raw() ,&mut rt_ino as *mut u32, &mut inode as *mut ext4_inode)};
+
+        let result = if ret == 0 {
+            Ok(to_inode_info(rt_ino, &inode))
+        }else {
+            Err(-1)
+        };
+        result
     }
 
     /// File open function.
