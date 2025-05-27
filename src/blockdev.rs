@@ -1,7 +1,7 @@
 use crate::bindings::*;
 use alloc::boxed::Box;
 use alloc::ffi::CString;
-use core::ffi::{c_char, c_void};
+use core::ffi::{c_char, c_void, CStr};
 use core::ptr::null_mut;
 use core::slice::{from_raw_parts, from_raw_parts_mut};
 use core::str;
@@ -31,7 +31,7 @@ pub struct Ext4BlockWrapper<K: KernelDevOp> {
 }
 
 impl<K: KernelDevOp> Ext4BlockWrapper<K> {
-    pub fn new(block_dev: K::DevType) -> Result<Self, i32> {
+    pub fn new(block_dev: K::DevType, name: &str, mount_point: &str) -> Result<Self, i32> {
         // note this ownership
         let devt_user = Box::into_raw(Box::new(block_dev)) as *mut c_void;
         //let devt_user = devt.as_mut() as *mut _ as *mut c_void;
@@ -70,10 +70,10 @@ impl<K: KernelDevOp> Ext4BlockWrapper<K> {
             journal: null_mut(),
         };
 
-        let c_name = CString::new("ext4_fs").expect("CString::new ext4_fs failed");
-        let c_name = c_name.as_bytes_with_nul(); // + '\0' 
-        // let c_mountpoint = CString::new("/mp/").unwrap();
-        let c_mountpoint = CString::new("/").unwrap();
+        let c_name = CString::new(name).expect("CString::new ext4_fs failed");
+        let c_name = c_name.as_bytes_with_nul(); // + '\0'
+                                                 // let c_mountpoint = CString::new("/mp/").unwrap();
+        let c_mountpoint = CString::new(mount_point).unwrap();
         let c_mountpoint = c_mountpoint.as_bytes_with_nul();
 
         let mut name: [u8; 16] = [0; 16];
@@ -216,6 +216,10 @@ impl<K: KernelDevOp> Ext4BlockWrapper<K> {
     }
 
     pub unsafe fn lwext4_mount(&mut self) -> Result<usize, i32> {
+        info!(
+            "Attempting to mount device {:?} at {:?}",
+            self.name, self.mount_point
+        );
         let c_name = &self.name as *const _ as *const c_char;
         let c_mountpoint = &self.mount_point as *const _ as *const c_char;
 
@@ -251,6 +255,7 @@ impl<K: KernelDevOp> Ext4BlockWrapper<K> {
         // ext4_bcache
 
         info!("lwext4 mount Okay");
+        self.lwext4_dir_ls();
         Ok(0)
     }
 
@@ -303,6 +308,7 @@ impl<K: KernelDevOp> Ext4BlockWrapper<K> {
         };
 
         info!("ls {}", str::from_utf8(path).unwrap());
+        unsafe { ext4_dmask_set(DEBUG_ALL) };
         unsafe {
             ext4_dir_open(&mut d, path as *const _ as *const c_char);
             let mut de = ext4_dir_entry_next(&mut d);
@@ -320,7 +326,6 @@ impl<K: KernelDevOp> Ext4BlockWrapper<K> {
             }
             ext4_dir_close(&mut d);
         }
-        info!("");
     }
 
     pub fn ext4_set_debug(&self) {
@@ -340,7 +345,9 @@ impl<K: KernelDevOp> Ext4BlockWrapper<K> {
         }
 
         info!("********************");
-        info!("ext4_mount_point_stats");
+        info!("ext4_mount_point_stats @ {:?}", unsafe {
+            CStr::from_ptr(self.mount_point.as_ptr() as *const c_char)
+        });
         info!("inodes_count = {:x?}", stats.inodes_count);
         info!("free_inodes_count = {:x?}", stats.free_inodes_count);
         info!("blocks_count = {:x?}", stats.blocks_count);

@@ -1,7 +1,7 @@
 use crate::bindings::*;
 use alloc::{ffi::CString, vec::Vec};
-use core::{slice, mem, convert::TryInto};
-use byteorder::{LittleEndian, ByteOrder};
+use byteorder::{ByteOrder, LittleEndian};
+use core::{convert::TryInto, mem, slice};
 
 // Ext4File文件操作与block device设备解耦了
 pub struct Ext4File {
@@ -12,7 +12,7 @@ pub struct Ext4File {
 }
 
 pub struct InodeInfo {
-    pub dev : u64,
+    pub dev: u64,
     pub st_ino: u32,
     pub nlink: u32,
     pub uid: u16,
@@ -27,20 +27,44 @@ pub struct InodeInfo {
 }
 
 impl InodeInfo {
-    pub fn dev(&self) -> u64 {self.dev}
-    pub fn st_ino(&self) -> u32 {self.st_ino}
-    pub fn nlink(&self) -> u32 {self.nlink}
-    pub fn uid(&self) -> u16 {self.uid}
-    pub fn gid(&self) -> u16 {self.gid}
-    pub fn nblk_lo(&self) -> u32 {self.nblk_lo}
+    pub fn dev(&self) -> u64 {
+        self.dev
+    }
+    pub fn st_ino(&self) -> u32 {
+        self.st_ino
+    }
+    pub fn nlink(&self) -> u32 {
+        self.nlink
+    }
+    pub fn uid(&self) -> u16 {
+        self.uid
+    }
+    pub fn gid(&self) -> u16 {
+        self.gid
+    }
+    pub fn nblk_lo(&self) -> u32 {
+        self.nblk_lo
+    }
 
-    pub fn atime(&self) -> u32 {self.atime}
-    pub fn mtime(&self) -> u32 {self.mtime}
-    pub fn ctime(&self) -> u32 {self.ctime}
+    pub fn atime(&self) -> u32 {
+        self.atime
+    }
+    pub fn mtime(&self) -> u32 {
+        self.mtime
+    }
+    pub fn ctime(&self) -> u32 {
+        self.ctime
+    }
 
-    pub fn atime_ex(&self) -> u32 {self.atime_ex}
-    pub fn mtime_ex(&self) -> u32 {self.mtime_ex}
-    pub fn ctime_ex(&self) -> u32 {self.ctime_ex}
+    pub fn atime_ex(&self) -> u32 {
+        self.atime_ex
+    }
+    pub fn mtime_ex(&self) -> u32 {
+        self.mtime_ex
+    }
+    pub fn ctime_ex(&self) -> u32 {
+        self.ctime_ex
+    }
 }
 
 pub fn to_inode_info(ino: u32, inode: &ext4_inode) -> InodeInfo {
@@ -53,8 +77,12 @@ pub fn to_inode_info(ino: u32, inode: &ext4_inode) -> InodeInfo {
         gid: u16::from(LittleEndian::read_u16(&inode.gid.to_ne_bytes())),
         nblk_lo: u32::from(LittleEndian::read_u32(&inode.blocks_count_lo.to_ne_bytes())),
         atime: u32::from(LittleEndian::read_u32(&inode.access_time.to_ne_bytes())),
-        ctime: u32::from(LittleEndian::read_u32(&inode.change_inode_time.to_ne_bytes())),
-        mtime: u32::from(LittleEndian::read_u32(&inode.modification_time.to_ne_bytes())),
+        ctime: u32::from(LittleEndian::read_u32(
+            &inode.change_inode_time.to_ne_bytes(),
+        )),
+        mtime: u32::from(LittleEndian::read_u32(
+            &inode.modification_time.to_ne_bytes(),
+        )),
         atime_ex: u32::from(LittleEndian::read_u32(&inode.atime_extra.to_ne_bytes())),
         ctime_ex: u32::from(LittleEndian::read_u32(&inode.ctime_extra.to_ne_bytes())),
         mtime_ex: u32::from(LittleEndian::read_u32(&inode.mtime_extra.to_ne_bytes())),
@@ -84,11 +112,11 @@ impl Ext4File {
         self.this_type.clone()
     }
 
-    pub fn get_inode(&self) -> Result<InodeInfo,i32> {
+    pub fn get_inode(&self) -> Result<InodeInfo, i32> {
         let mut rt_ino: u32 = 0;
         let bytes: [u8; mem::size_of::<ext4_inode>()] = [0; mem::size_of::<ext4_inode>()];
 
-        let mut inode = unsafe{
+        let mut inode = unsafe {
             if bytes.len() < mem::size_of::<ext4_inode>() {
                 core::panic!("Input bytes too short for ext4_inode");
             }
@@ -97,11 +125,17 @@ impl Ext4File {
         };
 
         //TODO:check inode safety
-        let ret= unsafe {ext4_raw_inode_fill(self.get_path().into_raw() ,&mut rt_ino as *mut u32, &mut inode as *mut ext4_inode)};
+        let ret = unsafe {
+            ext4_raw_inode_fill(
+                self.get_path().into_raw(),
+                &mut rt_ino as *mut u32,
+                &mut inode as *mut ext4_inode,
+            )
+        };
 
         let result = if ret == 0 {
             Ok(to_inode_info(rt_ino, &inode))
-        }else {
+        } else {
             Err(-1)
         };
         result
@@ -468,13 +502,13 @@ impl Ext4File {
         }
 
         let c_path = self.file_path.clone();
+        info!("ls {c_path:?}");
         let c_path = c_path.into_raw();
         let mut d: ext4_dir = unsafe { core::mem::zeroed() };
 
         let mut name: Vec<Vec<u8>> = Vec::new();
         let mut inode_type: Vec<InodeTypes> = Vec::new();
 
-        //info!("ls {}", str::from_utf8(path).unwrap());
         unsafe {
             ext4_dir_open(&mut d, c_path);
             drop(CString::from_raw(c_path));

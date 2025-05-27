@@ -73,13 +73,13 @@ fn main() {
     );
     */
 
+    println!("cargo:rerun-if-changed=c/wrapper.h");
+    println!("cargo:rerun-if-changed={}", c_path.to_str().unwrap());
     println!("cargo:rustc-link-lib=static={lwext4_lib}");
     println!(
         "cargo:rustc-link-search=native={}",
         c_path.to_str().unwrap()
     );
-    println!("cargo:rerun-if-changed=c/wrapper.h");
-    println!("cargo:rerun-if-changed={}", c_path.to_str().unwrap());
 }
 
 #[cfg(target_arch = "x86_64")]
