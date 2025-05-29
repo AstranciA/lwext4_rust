@@ -20,7 +20,7 @@ print = ["printf-compat"]
 log = "0.4"
 byteorder = { version = "1", default-features = false }
 printf-compat = { version = "0.1", default-features = false, optional = true }
-
+spin = "0.10.0"
 #[build-dependencies]
 #[target.'cfg(unix)'.build-dependencies]
 #bindgen = "0.69"

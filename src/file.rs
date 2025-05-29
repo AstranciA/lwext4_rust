@@ -1,8 +1,10 @@
 use crate::bindings::*;
 use alloc::{ffi::CString, vec::Vec};
 use core::{slice, mem, convert::TryInto};
+use core::ffi::{c_char, c_void};
 use byteorder::{LittleEndian, ByteOrder};
-
+use log::Level::Error;
+use spin::Mutex;
 // Ext4File文件操作与block device设备解耦了
 pub struct Ext4File {
     //file_desc_map: BTreeMap<CString, ext4_file>,
@@ -11,6 +13,7 @@ pub struct Ext4File {
     this_type: InodeTypes,
 }
 
+#[derive(Debug, Clone)]
 pub struct InodeInfo {
     pub dev : u64,
     pub st_ino: u32,
@@ -27,38 +30,34 @@ pub struct InodeInfo {
 }
 
 impl InodeInfo {
+    pub fn new(ino: u32, inode: &ext4_inode) -> Self{
+        Self {
+            dev: 0,
+            st_ino: ino,
+            nlink: u32::from(LittleEndian::read_u16(&inode.links_count.to_ne_bytes())),
+            uid: u16::from(LittleEndian::read_u16(&inode.uid.to_ne_bytes())),
+            gid: u16::from(LittleEndian::read_u16(&inode.gid.to_ne_bytes())),
+            nblk_lo: u32::from(LittleEndian::read_u32(&inode.blocks_count_lo.to_ne_bytes())),
+            atime: u32::from(LittleEndian::read_u32(&inode.access_time.to_ne_bytes())),
+            mtime: u32::from(LittleEndian::read_u32(&inode.modification_time.to_ne_bytes())),
+            ctime: u32::from(LittleEndian::read_u32(&inode.change_inode_time.to_ne_bytes())),
+            atime_ex: u32::from(LittleEndian::read_u32(&inode.atime_extra.to_ne_bytes())),
+            mtime_ex: u32::from(LittleEndian::read_u32(&inode.mtime_extra.to_ne_bytes())),
+            ctime_ex: u32::from(LittleEndian::read_u32(&inode.ctime_extra.to_ne_bytes())),
+        }
+    }
     pub fn dev(&self) -> u64 {self.dev}
     pub fn st_ino(&self) -> u32 {self.st_ino}
     pub fn nlink(&self) -> u32 {self.nlink}
     pub fn uid(&self) -> u16 {self.uid}
     pub fn gid(&self) -> u16 {self.gid}
     pub fn nblk_lo(&self) -> u32 {self.nblk_lo}
-
     pub fn atime(&self) -> u32 {self.atime}
     pub fn mtime(&self) -> u32 {self.mtime}
     pub fn ctime(&self) -> u32 {self.ctime}
-
     pub fn atime_ex(&self) -> u32 {self.atime_ex}
     pub fn mtime_ex(&self) -> u32 {self.mtime_ex}
     pub fn ctime_ex(&self) -> u32 {self.ctime_ex}
-}
-
-pub fn to_inode_info(ino: u32, inode: &ext4_inode) -> InodeInfo {
-    InodeInfo {
-        // dev: u64::from(LittleEndian::read_u16(&inode.blocks[0].to_ne_bytes())),
-        dev: 0,
-        st_ino: ino,
-        nlink: u32::from(LittleEndian::read_u16(&inode.links_count.to_ne_bytes())),
-        uid: u16::from(LittleEndian::read_u16(&inode.uid.to_ne_bytes())),
-        gid: u16::from(LittleEndian::read_u16(&inode.gid.to_ne_bytes())),
-        nblk_lo: u32::from(LittleEndian::read_u32(&inode.blocks_count_lo.to_ne_bytes())),
-        atime: u32::from(LittleEndian::read_u32(&inode.access_time.to_ne_bytes())),
-        ctime: u32::from(LittleEndian::read_u32(&inode.change_inode_time.to_ne_bytes())),
-        mtime: u32::from(LittleEndian::read_u32(&inode.modification_time.to_ne_bytes())),
-        atime_ex: u32::from(LittleEndian::read_u32(&inode.atime_extra.to_ne_bytes())),
-        ctime_ex: u32::from(LittleEndian::read_u32(&inode.ctime_extra.to_ne_bytes())),
-        mtime_ex: u32::from(LittleEndian::read_u32(&inode.mtime_extra.to_ne_bytes())),
-    }
 }
 
 impl Ext4File {
@@ -84,7 +83,7 @@ impl Ext4File {
         self.this_type.clone()
     }
 
-    pub fn get_inode(&self) -> Result<InodeInfo,i32> {
+    pub fn get_inode(&self) -> Result<InodeInfo,u32> {
         let mut rt_ino: u32 = 0;
         let bytes: [u8; mem::size_of::<ext4_inode>()] = [0; mem::size_of::<ext4_inode>()];
 
@@ -100,11 +99,89 @@ impl Ext4File {
         let ret= unsafe {ext4_raw_inode_fill(self.get_path().into_raw() ,&mut rt_ino as *mut u32, &mut inode as *mut ext4_inode)};
 
         let result = if ret == 0 {
-            Ok(to_inode_info(rt_ino, &inode))
+            Ok(InodeInfo::new(rt_ino, &inode))
         }else {
-            Err(-1)
+            Err(ENODATA)
         };
         result
+    }
+
+    pub fn set_atime(&self, atime:u32,atime_n:u32,) -> Result<usize,i32> {
+        let path = self.get_path().into_raw();
+        let r = unsafe { ext4_atime_set(path, atime)};
+        if r != EOK as i32{
+            error!("atime set failed");
+            return Err(r);
+        } 
+        Ok(r as usize)
+    }
+
+    pub fn set_mtime(&self,mtime:u32, mtime_n:u32) -> Result<usize,i32> {
+        let path = self.get_path().into_raw();
+        let r = unsafe { ext4_mtime_set(path, mtime)};
+        if r != EOK as i32{
+            error!("mtime set failed");
+            return Err(r);
+        }
+        Ok(r as usize)
+    }
+    pub fn get_xattr(
+        &self,
+        name: *const c_char,
+        name_len: usize,
+        buf: *mut c_void,
+        buf_size: usize,
+        data_size: *mut usize
+    )->Result<usize,i32>{
+        let path = self.get_path().into_raw();
+        let r = unsafe{ext4_getxattr(path, name, name_len, buf, buf_size, data_size)};
+        if r != EOK as i32{
+            error!("get xattr failed");
+            return Err(r);
+        }
+        Ok(r as usize)
+    }
+    pub fn set_xattr(
+        &self,
+        name: *const c_char,
+        name_len: usize,
+        data: *mut c_void,
+        data_size: usize,
+    )->Result<usize,i32> {
+        let path = self.get_path().into_raw();
+        let r = unsafe{ext4_setxattr(path, name, name_len, data, data_size)};
+        if r != EOK as i32{
+            error!("set xattr failed");
+            return Err(r);
+        }
+        Ok(r as usize)
+    }
+    pub fn list_xattr(
+        &self,
+        list: *mut c_char,
+        size: usize,
+        ret_size: *mut usize,
+    )->Result<usize,i32>{
+        let path = self.get_path().into_raw();
+        let r = unsafe{ext4_listxattr(path, list, size, ret_size)};
+        if r != EOK as i32{
+            error!("list xattr failed");
+            return Err(r);
+        }
+        Ok(r as usize)
+    }
+    pub fn remove_xattr(
+        &self,
+        name: *const c_char,
+        name_len: usize,
+    )->Result<usize,i32>{
+        let path = self.get_path().into_raw();
+        let r = unsafe{ext4_removexattr(path,name,name_len)};
+        if r != EOK as i32{
+            error!("remove xattr failed");
+            return Err(r);
+        }
+        Ok(r as usize)
     }
 
     /// File open function.
