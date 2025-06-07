@@ -113,12 +113,14 @@ impl Ext4File {
     }
 
     pub fn set_atime(&self, atime:u32,atime_n:u32,) -> Result<usize,i32> {
+        warn!("{atime} {atime_n} {:?}", self.get_path());
         let path = self.get_path().into_raw();
         let r = unsafe { ext4_atime_set(path, atime)};
         if r != EOK as i32{
-            error!("atime set failed");
-            return Err(r);
-        } 
+            // FIXME: atime failed if file is unlinked but still exist
+            warn!("atime set failed: {}, but return Ok", r);
+            return Ok(0);
+        }
         Ok(r as usize)
     }
 
@@ -126,8 +128,9 @@ impl Ext4File {
         let path = self.get_path().into_raw();
         let r = unsafe { ext4_mtime_set(path, mtime)};
         if r != EOK as i32{
-            error!("mtime set failed");
-            return Err(r);
+            // FIXME: mtime failed if file is unlinked but still exist
+            warn!("mtime set failed: {}, but return Ok", r);
+            return Ok(0);
         }
         Ok(r as usize)
     }
@@ -485,6 +488,32 @@ impl Ext4File {
         trace!("Inode mode types: {:?}", itypes);
 
         itypes
+        /*the new instruction*/
+        // if let Ok(mode) = self.file_mode_get() {
+        //     let cal: u32 = 0o777;
+        //     let types = mode & (!cal);
+        //     let itypes = match types {
+        //         0x1000 => InodeTypes::EXT4_INODE_MODE_FIFO,
+        //         0x2000 => InodeTypes::EXT4_INODE_MODE_CHARDEV,
+        //         0x4000 => InodeTypes::EXT4_INODE_MODE_DIRECTORY,
+        //         0x6000 => InodeTypes::EXT4_INODE_MODE_BLOCKDEV,
+        //         0x8000 => InodeTypes::EXT4_INODE_MODE_FILE,
+        //         0xA000 => InodeTypes::EXT4_INODE_MODE_SOFTLINK,
+        //         0xC000 => InodeTypes::EXT4_INODE_MODE_SOCKET,
+        //         0xF000 => InodeTypes::EXT4_INODE_MODE_TYPE_MASK,
+        //         _ => {
+        //             warn!("Unknown inode mode type {:x}", types);
+        //             InodeTypes::EXT4_INODE_MODE_FILE
+        //         }
+        //     };
+        //     trace!("Inode mode types: {:?}", itypes);
+        // 
+        //     itypes
+        // } else {
+        //     // 处理错误
+        //     warn!("Failed to get file mode");
+        //     InodeTypes::EXT4_INODE_MODE_FILE
+        // }
     }
 
     /********* DIRECTORY OPERATION *********/
