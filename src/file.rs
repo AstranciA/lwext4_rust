@@ -16,41 +16,56 @@ pub struct Ext4File {
 #[derive(Debug, Clone)]
 pub struct InodeInfo {
     pub dev: u64,
-    pub st_ino: u32,
+    pub st_ino: u64,
     pub nlink: u32,
-    pub uid: u16,
-    pub gid: u16,
+    pub uid: u32,
+    pub gid: u32,
     pub nblk_lo: u32,
     pub atime: u32,
+    pub btime: u32,
     pub mtime: u32,
     pub ctime: u32,
     pub atime_ex: u32,
+    pub btime_ex: u32,
     pub mtime_ex: u32,
     pub ctime_ex: u32,
 }
 
 impl InodeInfo {
     pub fn new(ino: u32, inode: &ext4_inode) -> Self{
+        let uid_lo = LittleEndian::read_u16(&inode.uid.to_ne_bytes()) as u32;
+        let gid_lo = LittleEndian::read_u16(&inode.gid.to_ne_bytes()) as u32;
+        let (uid_hi, gid_hi) = unsafe {
+            let osd2 = inode.osd2.linux2;
+            (
+                LittleEndian::read_u16(&osd2.uid_high.to_ne_bytes()) as u32,
+                LittleEndian::read_u16(&osd2.gid_high.to_ne_bytes()) as u32,
+            )
+        };
+        let uid = (uid_hi << 16) | uid_lo;
+        let gid = (gid_hi << 16) | gid_lo;
         Self {
             dev: 0,
-            st_ino: ino,
+            st_ino: ino as u64,
             nlink: u32::from(LittleEndian::read_u16(&inode.links_count.to_ne_bytes())),
-            uid: u16::from(LittleEndian::read_u16(&inode.uid.to_ne_bytes())),
-            gid: u16::from(LittleEndian::read_u16(&inode.gid.to_ne_bytes())),
+            uid,
+            gid,
             nblk_lo: u32::from(LittleEndian::read_u32(&inode.blocks_count_lo.to_ne_bytes())),
             atime: u32::from(LittleEndian::read_u32(&inode.access_time.to_ne_bytes())),
+            btime:u32::from(LittleEndian::read_u32(&inode.crtime.to_ne_bytes())),
             mtime: u32::from(LittleEndian::read_u32(&inode.modification_time.to_ne_bytes())),
             ctime: u32::from(LittleEndian::read_u32(&inode.change_inode_time.to_ne_bytes())),
             atime_ex: u32::from(LittleEndian::read_u32(&inode.atime_extra.to_ne_bytes())),
+            btime_ex:u32::from(LittleEndian::read_u32(&inode.crtime_extra.to_ne_bytes())),
             mtime_ex: u32::from(LittleEndian::read_u32(&inode.mtime_extra.to_ne_bytes())),
             ctime_ex: u32::from(LittleEndian::read_u32(&inode.ctime_extra.to_ne_bytes())),
         }
     }
     pub fn dev(&self) -> u64 {self.dev}
-    pub fn st_ino(&self) -> u32 {self.st_ino}
+    pub fn st_ino(&self) -> u64 {self.st_ino}
     pub fn nlink(&self) -> u32 {self.nlink}
-    pub fn uid(&self) -> u16 {self.uid}
-    pub fn gid(&self) -> u16 {self.gid}
+    pub fn uid(&self) -> u32 {self.uid}
+    pub fn gid(&self) -> u32 {self.gid}
     pub fn nblk_lo(&self) -> u32 {self.nblk_lo}
     pub fn atime(&self) -> u32 {self.atime}
     pub fn mtime(&self) -> u32 {self.mtime}
@@ -58,6 +73,8 @@ impl InodeInfo {
     pub fn atime_ex(&self) -> u32 {self.atime_ex}
     pub fn mtime_ex(&self) -> u32 {self.mtime_ex}
     pub fn ctime_ex(&self) -> u32 {self.ctime_ex}
+    pub fn btime(&self) -> u32 {self.btime}
+    pub fn btime_ex(&self) -> u32 {self.btime_ex}
 }
 
 impl Ext4File {
@@ -111,7 +128,7 @@ impl Ext4File {
         };
         result
     }
-
+    
     pub fn set_atime(&self, atime:u32,atime_n:u32,) -> Result<usize,i32> {
         warn!("{atime} {atime_n} {:?}", self.get_path());
         let path = self.get_path().into_raw();
