@@ -5,6 +5,7 @@ use core::ffi::{c_char, c_void};
 use core::{convert::TryInto, mem, slice};
 use log::Level::Error;
 use spin::Mutex;
+pub const S_IFLNK: u32 = 0xA000;
 // Ext4File文件操作与block device设备解耦了
 pub struct Ext4File {
     //file_desc_map: BTreeMap<CString, ext4_file>,
@@ -236,6 +237,28 @@ impl Ext4File {
             return Err(r);
         }
         Ok(r as usize)
+    }
+    pub fn is_link(&self) -> bool {
+        self.this_type.clone() as u32 == S_IFLNK
+    }
+    pub fn read_link(
+        &self,
+        buf: *mut core::ffi::c_char,
+        bufsize: usize,
+    ) -> Result<usize, i32>{
+        if !(self.this_type.clone() as u32 == S_IFLNK) {
+            debug!("read_link: {:?} is not a symbolic link", self.get_path().into_raw());
+            return Err(-1);
+        }
+        let path = self.get_path().into_raw();
+        let mut rcnt: usize = 0;
+        let ret = unsafe {
+            ext4_readlink(path, buf, bufsize, &mut rcnt as *mut usize,) };
+        if ret < 0 {
+           debug!("ext4_readlink failed for {:?}: error {}", self.get_path().into_raw(), ret);
+            return Err(-1);
+        }
+        Ok(rcnt as usize)
     }
 
     /// File open function.
