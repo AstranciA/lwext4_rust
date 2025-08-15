@@ -24,3 +24,6 @@ spin = "0.10.0"
 #[build-dependencies]
 #[target.'cfg(unix)'.build-dependencies]
 #bindgen = "0.69"
+
+[patch.crates-io]
+cty = { git = "https://github.com/MukioXun/cty.git" }
