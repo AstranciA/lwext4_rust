@@ -1,7 +1,9 @@
 use crate::bindings::*;
+use alloc::string::{String, ToString};
 use alloc::{ffi::CString, vec::Vec};
 use byteorder::{ByteOrder, LittleEndian};
 use core::ffi::{c_char, c_void};
+use core::str::FromStr;
 use core::{convert::TryInto, mem, slice};
 use log::Level::Error;
 use spin::Mutex;
@@ -283,7 +285,7 @@ impl Ext4File {
         let real_path = if self.is_link() {
             // 读取符号链接内容
             let mut link_buf = [0u8; 64];
-            self.read_link(link_buf.as_mut_ptr() as *mut u8, link_buf.len())?;
+            self.read_link(link_buf.as_mut_ptr() as *mut c_char, link_buf.len())?;
 
             // 找到第一个 null 终止符的位置
             let null_pos = link_buf
@@ -292,13 +294,14 @@ impl Ext4File {
                 .unwrap_or(link_buf.len());
 
             // 创建 CString (这里会分配新内存，因此拥有所有权)
-            unsafe { CString::from_vec_unchecked(link_buf[0..null_pos].to_vec()) }
+            let s = unsafe { CString::from_vec_unchecked(link_buf[0..null_pos].to_vec()) };
+            let s = resolve_symlink_path(orig_path, s.to_str().unwrap());
+            debug!("find symlink: {:?} -> {:?}", orig_path, s);
+            CString::from_str(s.as_str()).expect("Cstring::from_str fail")
         } else {
             // 直接从原始路径创建 CString
             CString::new(orig_path).expect("CString::new failed")
         };
-
-        warn!("Opening path: {:?}", real_path);
 
         if real_path != self.get_path() {
             trace!(
@@ -307,11 +310,6 @@ impl Ext4File {
                 real_path
             );
         }
-
-        warn!(
-            "c_path: {:?}, flags: {:?}, file_desc: {:?}",
-            real_path, flags, self.file_desc
-        );
 
         // 获取原始指针
         let c_path_ptr = real_path.into_raw();
@@ -839,5 +837,28 @@ impl From<usize> for InodeTypes {
                 InodeTypes::EXT4_DE_UNKNOWN
             }
         }
+    }
+}
+/// 解析符号链接的目标路径
+fn resolve_symlink_path(symlink_path: &str, target: &str) -> String {
+    if target.starts_with('/') {
+        // 如果目标是绝对路径，直接使用
+        target.to_string()
+    } else {
+        // 如果目标是相对路径，需要基于符号链接的目录进行解析
+        let parent_dir = get_parent_directory(symlink_path);
+        if parent_dir.is_empty() {
+            target.to_string()
+        } else {
+            format!("{}/{}", parent_dir, target)
+        }
+    }
+}
+
+/// 获取路径的父目录
+fn get_parent_directory(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(pos) => &path[0..pos],
+        None => "",
     }
 }
