@@ -5,7 +5,7 @@ use core::ffi::{c_char, c_void};
 use core::{convert::TryInto, mem, slice};
 use log::Level::Error;
 use spin::Mutex;
-pub const S_IFLNK: u32 = 0xA000;
+pub const S_IFLNK: u32 = 7;
 // Ext4File文件操作与block device设备解耦了
 pub struct Ext4File {
     //file_desc_map: BTreeMap<CString, ext4_file>,
@@ -241,21 +241,23 @@ impl Ext4File {
     pub fn is_link(&self) -> bool {
         self.this_type.clone() as u32 == S_IFLNK
     }
-    pub fn read_link(
-        &self,
-        buf: *mut core::ffi::c_char,
-        bufsize: usize,
-    ) -> Result<usize, i32>{
+    pub fn read_link(&self, buf: *mut core::ffi::c_char, bufsize: usize) -> Result<usize, i32> {
         if !(self.this_type.clone() as u32 == S_IFLNK) {
-            debug!("read_link: {:?} is not a symbolic link", self.get_path().into_raw());
+            debug!(
+                "read_link: {:?} is not a symbolic link",
+                self.get_path().into_raw()
+            );
             return Err(-1);
         }
         let path = self.get_path().into_raw();
         let mut rcnt: usize = 0;
-        let ret = unsafe {
-            ext4_readlink(path, buf, bufsize, &mut rcnt as *mut usize,) };
+        let ret = unsafe { ext4_readlink(path, buf, bufsize, &mut rcnt as *mut usize) };
         if ret < 0 {
-           debug!("ext4_readlink failed for {:?}: error {}", self.get_path().into_raw(), ret);
+            debug!(
+                "ext4_readlink failed for {:?}: error {}",
+                self.get_path().into_raw(),
+                ret
+            );
             return Err(-1);
         }
         Ok(rcnt as usize)
@@ -276,35 +278,104 @@ impl Ext4File {
     /// |---------------------------------------------------------------|
     /// |   a+ or ab+ or a+b        O_RDWR|O_CREAT|O_APPEND             |
     /// |---------------------------------------------------------------|
-    pub fn file_open(&mut self, path: &str, flags: u32) -> Result<usize, i32> {
-        let c_path = CString::new(path).expect("CString::new failed");
-        if c_path != self.get_path() {
+    pub fn file_open(&mut self, orig_path: &str, flags: u32) -> Result<usize, i32> {
+        // 确定实际路径
+        let real_path = if self.is_link() {
+            // 读取符号链接内容
+            let mut link_buf = [0u8; 64];
+            self.read_link(link_buf.as_mut_ptr() as *mut u8, link_buf.len())?;
+
+            // 找到第一个 null 终止符的位置
+            let null_pos = link_buf
+                .iter()
+                .position(|&b| b == 0)
+                .unwrap_or(link_buf.len());
+
+            // 创建 CString (这里会分配新内存，因此拥有所有权)
+            unsafe { CString::from_vec_unchecked(link_buf[0..null_pos].to_vec()) }
+        } else {
+            // 直接从原始路径创建 CString
+            CString::new(orig_path).expect("CString::new failed")
+        };
+
+        warn!("Opening path: {:?}", real_path);
+
+        if real_path != self.get_path() {
             trace!(
-                "Ext4File file_open, cur path={}, new path={}",
+                "Ext4File file_open, cur path={}, new path={:?}",
                 self.file_path.to_str().unwrap(),
-                path
+                real_path
             );
         }
-        //let to_map = c_path.clone();
-        let c_path = c_path.into_raw();
-        let flags = Self::flags_to_cstring(flags);
-        let flags = flags.into_raw();
 
-        let r = unsafe { ext4_fopen(&mut self.file_desc, c_path, flags) };
+        warn!(
+            "c_path: {:?}, flags: {:?}, file_desc: {:?}",
+            real_path, flags, self.file_desc
+        );
+
+        // 获取原始指针
+        let c_path_ptr = real_path.into_raw();
+        let flags_cstr = Self::flags_to_cstring(flags);
+        let flags_ptr = flags_cstr.into_raw();
+
+        let r = unsafe { ext4_fopen(&mut self.file_desc, c_path_ptr, flags_ptr) };
+
+        // 安全释放 CString 资源
         unsafe {
-            // deallocate the CString
-            drop(CString::from_raw(c_path));
-            drop(CString::from_raw(flags));
+            let _ = CString::from_raw(c_path_ptr);
+            let _ = CString::from_raw(flags_ptr);
         }
+
         if r != EOK as i32 {
-            error!("ext4_fopen: {}, rc = {}", path, r);
+            error!("ext4_fopen failed with rc = {}", r);
             return Err(r);
         }
-        //self.file_desc_map.insert(to_map, fd); // store c_path
-        trace!("file_open {}, mp={:#x}", path, self.file_desc.mp as usize);
+
+        trace!("file_open successful, mp={:#x}", self.file_desc.mp as usize);
         Ok(EOK as usize)
     }
 
+    /*
+     *    pub fn file_open(&mut self, path: &str, flags: u32) -> Result<usize, i32> {
+     *        let path = if self.is_link() {
+     *            let mut link = [0u8; 64];
+     *            self.read_link(link.as_mut_ptr() as *mut u8, link.len())? ;
+     *            let link = CString::new(link).expect("CString::new failed");
+     *            link.to_str().unwrap()
+     *        } else {
+     *            path
+     *        };
+     *        warn!("{path:?}");
+     *        let c_path = CString::new(path).expect("CString::new failed");
+     *        if c_path != self.get_path() {
+     *            trace!(
+     *                "Ext4File file_open, cur path={}, new path={}",
+     *                self.file_path.to_str().unwrap(),
+     *                path
+     *            );
+     *        }
+     *        warn!("{:?} {:?} {:?}", c_path, flags, self.file_desc);
+     *        //let to_map = c_path.clone();
+     *        let c_path = c_path.into_raw();
+     *        let flags = Self::flags_to_cstring(flags);
+     *        let flags = flags.into_raw();
+     *
+     *        let r = unsafe { ext4_fopen(&mut self.file_desc, c_path, flags) };
+     *        unsafe {
+     *            // deallocate the CString
+     *            drop(CString::from_raw(c_path));
+     *            drop(CString::from_raw(flags));
+     *        }
+     *        if r != EOK as i32 {
+     *            error!("ext4_fopen: {}, rc = {}", path, r);
+     *            return Err(r);
+     *        }
+     *        //self.file_desc_map.insert(to_map, fd); // store c_path
+     *        trace!("file_open {}, mp={:#x}", path, self.file_desc.mp as usize);
+     *        Ok(EOK as usize)
+     *    }
+     *
+     */
     pub fn file_close(&mut self) -> Result<usize, i32> {
         if self.file_desc.mp != core::ptr::null_mut() {
             trace!("file_close {:?}", self.get_path());
